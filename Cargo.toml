@@ -1,0 +1,22 @@
+[package]
+name = "z-line"
+version = "0.1.0"
+edition = "2021"
+description = "Z-Line: a terminal Zalo client (CLI + TUI) built on the ctdozlite core"
+publish = false
+
+[[bin]]
+name = "zline"
+path = "src/main.rs"
+
+[dependencies]
+# The protocol layer is reused from ctdozlite (library crate `zalo_rust`). Pinned to a commit
+# because the API is pre-1.0 (v0.0.7) and not stable.
+zalo_rust = { package = "ctdozlite", git = "https://github.com/ctdoteam1110/ctdozlite", rev = "bcecc40c44f1c36de50b0f52cb97eeb868bacbe3" }
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util"] }
+
+[profile.release]
+strip = true
