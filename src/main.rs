@@ -6,6 +6,7 @@ mod ctx;
 mod fmt;
 mod paths;
 mod threads;
+mod tui;
 
 use anyhow::Result;
 use clap::Parser;
@@ -23,7 +24,8 @@ async fn main() {
 async fn run() -> Result<()> {
     let cli = Cli::parse();
     let g = &cli.global;
-    match cli.cmd {
+    match cli.cmd.unwrap_or(Command::Tui) {
+        Command::Tui => tui::run(g).await,
         Command::Login { force } => cmd::auth::login(g, force).await,
         Command::Logout { purge } => cmd::auth::logout(g, purge),
         Command::Whoami { offline } => cmd::auth::whoami(g, offline).await,

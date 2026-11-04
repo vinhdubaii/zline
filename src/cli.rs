@@ -14,8 +14,9 @@ use clap::{Args, Parser, Subcommand};
 pub struct Cli {
     #[command(flatten)]
     pub global: Global,
+    /// Không có lệnh con thì mở giao diện TUI.
     #[command(subcommand)]
-    pub cmd: Command,
+    pub cmd: Option<Command>,
 }
 
 /// Options accepted by every subcommand.
@@ -40,6 +41,8 @@ pub struct Global {
 
 #[derive(Subcommand)]
 pub enum Command {
+    /// Mở giao diện TUI (mặc định khi không có lệnh con)
+    Tui,
     /// Đăng nhập bằng mã QR (quét bằng Zalo trên điện thoại)
     Login {
         /// Đăng nhập lại dù phiên hiện tại vẫn còn hiệu lực

@@ -26,6 +26,18 @@ pub fn last_ts(t: &Thread) -> i64 {
         .max(clock::normalize_ts_ms(t.presentation.last_message_ts))
 }
 
+/// Preview line: the stored preview, else the text of the newest message we hold.
+pub fn preview_of(t: &Thread) -> String {
+    if !t.preview.is_empty() {
+        return t.preview.clone();
+    }
+    t.messages
+        .iter()
+        .max_by_key(|m| clock::normalize_ts_ms(m.ts))
+        .map(|m| m.text.clone())
+        .unwrap_or_default()
+}
+
 pub fn sort_recent(threads: &mut [Thread]) {
     threads.sort_by_key(|t| std::cmp::Reverse(last_ts(t)));
 }

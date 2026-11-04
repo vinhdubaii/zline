@@ -35,7 +35,7 @@ fn read_stdin() -> Result<String> {
 }
 
 /// Server message ID from a send response (`data.msgId`, string or number).
-fn msg_id(resp: &Value) -> String {
+pub(crate) fn msg_id(resp: &Value) -> String {
     match resp.get("data").and_then(|d| d.get("msgId")) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(n)) => n.to_string(),
@@ -48,6 +48,44 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Store the message we just sent so it shows up in `read` and the TUI without waiting for the
+/// server echo. No-op when the server gave no message ID.
+pub(crate) fn persist_echo(
+    thread_id: &str,
+    thread_name: &str,
+    is_group: bool,
+    text: &str,
+    msg_id: &str,
+    quote: Option<&ChatMessage>,
+) -> Result<()> {
+    if msg_id.is_empty() {
+        return Ok(());
+    }
+    let ts = now_ms();
+    let mut m = ChatMessage {
+        id: msg_id.to_string(),
+        text: text.to_string(),
+        ts,
+        time: clock::message_time(ts),
+        is_outgoing: true,
+        ..Default::default()
+    };
+    if let Some(q) = quote {
+        m.reply_to_id = Some(q.id.clone());
+        m.reply_to_sender = Some(q.sender.clone());
+        m.reply_to_text = Some(q.text.clone());
+    }
+    let echo = Thread {
+        id: thread_id.to_string(),
+        name: thread_name.to_string(),
+        is_group,
+        messages: vec![m],
+        ..Default::default()
+    };
+    store::persist_threads(&mut MessageStore::open(DB_FILE)?, &[echo])?;
+    Ok(())
 }
 
 pub async fn run(g: &Global, thread: &str, text: Vec<String>) -> Result<()> {
@@ -79,25 +117,8 @@ pub async fn run(g: &Global, thread: &str, text: Vec<String>) -> Result<()> {
     // Keep a local echo so `zline read` shows it immediately; the server copy has the same ID
     // and is merged when it arrives. Without an ID we skip it rather than risk a duplicate.
     let mid = msg_id(&resp);
-    if !mid.is_empty() {
-        let ts = now_ms();
-        let echo = Thread {
-            id: id.clone(),
-            name: name.clone(),
-            is_group,
-            messages: vec![ChatMessage {
-                id: mid.clone(),
-                text: text.clone(),
-                ts,
-                time: clock::message_time(ts),
-                is_outgoing: true,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        if let Err(e) = store::persist_threads(&mut MessageStore::open(DB_FILE)?, &[echo]) {
-            eprintln!("! Đã gửi nhưng không lưu được bản sao cục bộ: {e:#}");
-        }
+    if let Err(e) = persist_echo(&id, &name, is_group, &text, &mid, None) {
+        eprintln!("! Đã gửi nhưng không lưu được bản sao cục bộ: {e:#}");
     }
 
     if ctx.json {

@@ -1,24 +1,11 @@
 use anyhow::Result;
 use serde_json::{json, Value};
-use zalo_rust::chat::Thread;
 
 use crate::cli::Global;
 use crate::cmd::sync;
 use crate::ctx::Ctx;
 use crate::fmt::{clip, pad, short_time};
 use crate::threads;
-
-/// Preview line: the stored preview, else the text of the newest message we hold.
-fn preview(t: &Thread) -> String {
-    if !t.preview.is_empty() {
-        return t.preview.clone();
-    }
-    t.messages
-        .iter()
-        .max_by_key(|m| zalo_rust::clock::normalize_ts_ms(m.ts))
-        .map(|m| m.text.clone())
-        .unwrap_or_default()
-}
 
 pub async fn run(g: &Global, groups: bool, friends: bool, refresh: bool, limit: usize) -> Result<()> {
     let mut ctx = if refresh {
@@ -48,7 +35,7 @@ pub async fn run(g: &Global, groups: bool, friends: bool, refresh: bool, limit: 
                     "name": t.name,
                     "is_group": t.is_group,
                     "last_ts": threads::last_ts(t),
-                    "preview": preview(t),
+                    "preview": threads::preview_of(t),
                 })
             })
             .collect();
@@ -68,7 +55,7 @@ pub async fn run(g: &Global, groups: bool, friends: bool, refresh: bool, limit: 
                 pad(if t.is_group { "nhóm" } else { "bạn" }, 5),
                 pad(&short_time(threads::last_ts(t)), 11),
                 pad(&clip(&t.name, 28), 28),
-                pad(&clip(&preview(t), 40), 40),
+                pad(&clip(&threads::preview_of(t), 40), 40),
                 t.id
             );
         }

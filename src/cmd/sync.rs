@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use zalo_rust::chat::{self, PollState, Thread};
 use zalo_rust::history_sync;
+use zalo_rust::session::{Session, SessionStatus};
 use zalo_rust::store::{self, MessageStore};
 
 use crate::cli::Global;
@@ -21,45 +22,65 @@ fn merge(all: &mut Vec<Thread>, incoming: Vec<Thread>) {
     }
 }
 
+/// Result of a quiet refresh: nothing is printed, so the TUI can use it too.
+pub struct Refreshed {
+    pub threads: Vec<Thread>,
+    pub new_msgs: usize,
+    /// Non-fatal problems (for example one endpoint failing).
+    pub warnings: Vec<String>,
+}
+
 /// Pull friends, groups and recent messages from the server into the local cache and SQLite.
-pub async fn refresh(ctx: &mut Ctx) -> Result<Vec<Thread>> {
+///
+/// Returns `Err` only for failures that stop the whole refresh; callers can check
+/// `SessionStatus::from_error` to see whether the session itself was refused.
+pub async fn refresh_core(s: &Session) -> Result<Refreshed> {
     let mut all = threads::load_local();
+    let mut warnings = Vec::new();
 
-    let friends = chat::get_friends(&ctx.s).await;
-    match friends {
+    match chat::get_friends(s).await {
         Ok(list) => merge(&mut all, list),
-        Err(e) => {
-            if ctx.expire_if_needed(&e) {
-                bail!("{RELOGIN}");
-            }
-            eprintln!("! Không tải được danh sách bạn bè: {e:#}");
-        }
+        Err(e) if SessionStatus::from_error(&e) == SessionStatus::Expired => return Err(e),
+        Err(e) => warnings.push(format!("Không tải được danh sách bạn bè: {e:#}")),
     }
-
-    let groups = chat::get_groups(&ctx.s).await;
-    match groups {
+    match chat::get_groups(s).await {
         Ok(list) => merge(&mut all, list),
-        Err(e) => {
-            if ctx.expire_if_needed(&e) {
-                bail!("{RELOGIN}");
-            }
-            eprintln!("! Không tải được danh sách nhóm: {e:#}");
-        }
+        Err(e) if SessionStatus::from_error(&e) == SessionStatus::Expired => return Err(e),
+        Err(e) => warnings.push(format!("Không tải được danh sách nhóm: {e:#}")),
     }
-
     let mut state = PollState::default();
-    let polled = chat::poll_new_messages(&ctx.s, &mut state, &mut all).await;
-    if let Err(e) = polled {
-        if ctx.expire_if_needed(&e) {
-            bail!("{RELOGIN}");
-        }
-        eprintln!("! Không tải được tin nhắn mới: {e:#}");
+    match chat::poll_new_messages(s, &mut state, &mut all).await {
+        Ok(()) => {}
+        Err(e) if SessionStatus::from_error(&e) == SessionStatus::Expired => return Err(e),
+        Err(e) => warnings.push(format!("Không tải được tin nhắn mới: {e:#}")),
     }
 
-    let new = store::persist_threads(&mut MessageStore::open(DB_FILE)?, &all)?;
+    let new_msgs = store::persist_threads(&mut MessageStore::open(DB_FILE)?, &all)?;
     chat::save_threads_cache(&all);
-    eprintln!("✓ Đã đồng bộ {} hội thoại, {new} tin mới.", all.len());
-    Ok(all)
+    Ok(Refreshed {
+        threads: all,
+        new_msgs,
+        warnings,
+    })
+}
+
+/// [`refresh_core`] with progress on stderr and session-expiry bookkeeping, for the CLI.
+pub async fn refresh(ctx: &mut Ctx) -> Result<Vec<Thread>> {
+    match refresh_core(&ctx.s).await {
+        Ok(r) => {
+            for w in &r.warnings {
+                eprintln!("! {w}");
+            }
+            eprintln!("✓ Đã đồng bộ {} hội thoại, {} tin mới.", r.threads.len(), r.new_msgs);
+            Ok(r.threads)
+        }
+        Err(e) => {
+            if ctx.expire_if_needed(&e) {
+                bail!("{RELOGIN}");
+            }
+            Err(e)
+        }
+    }
 }
 
 pub async fn run(g: &Global, thread: Option<String>) -> Result<()> {

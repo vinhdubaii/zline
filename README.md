@@ -6,7 +6,31 @@ Zalo client cho terminal, viết bằng Rust. Dùng lõi giao thức của [ctdo
 
 ## Trạng thái
 
-Giai đoạn 1–2: lệnh CLI. Chế độ TUI kiểu Discordo (3 khung, realtime qua WebSocket, ảnh inline) là giai đoạn sau.
+- Lệnh CLI: đăng nhập, đồng bộ, liệt kê, đọc, gửi.
+- **TUI kiểu Discordo** (`zline` hoặc `zline tui`): ba khung (hội thoại, tin nhắn, thành viên), nhận tin realtime qua WebSocket (có HTTP poll dự phòng), gửi, trả lời (quote), cảm xúc nhanh, chuyển nhanh bằng `Ctrl+K`.
+- Chưa có: xem ảnh inline, gửi file/ảnh, thu hồi/xóa tin, trạng thái online và "đang gõ" (chưa kiểm chứng Zalo có cung cấp), cuộn lịch sử cũ hơn 200 tin trong TUI (dùng `zline sync <nhóm>` để kéo thêm).
+
+## TUI
+
+```
+zline                # mở TUI (mặc định)
+zline --profile work # hồ sơ khác
+```
+
+| Phím | Việc |
+|---|---|
+| `Ctrl+G` / `Ctrl+T` / `Ctrl+Y` | tới hội thoại / tin nhắn / thành viên |
+| `Tab`, `Shift+Tab` | khung kế / trước |
+| `Ctrl+K` | chuyển nhanh giữa hội thoại (gõ tên, không cần dấu) |
+| `Enter` | mở hội thoại; gửi tin |
+| `Shift+Enter`, `Alt+Enter`, `Ctrl+J` | xuống dòng (Shift+Enter cần terminal hỗ trợ kitty keyboard protocol) |
+| `r` hoặc `Enter` ở khung tin nhắn | trả lời tin đang chọn |
+| `1`–`6` ở khung tin nhắn | cảm xúc nhanh |
+| `F2` / `F3` | ẩn/hiện khung hội thoại / thành viên |
+| `Ctrl+R` | đồng bộ; `Ctrl+L` vẽ lại màn hình |
+| `F1` | trợ giúp; `Ctrl+C` thoát |
+
+Khi chưa đăng nhập hoặc phiên hết hạn, TUI vẫn mở để xem lịch sử đã lưu (offline) nhưng không gửi được.
 
 ## Lệnh
 
