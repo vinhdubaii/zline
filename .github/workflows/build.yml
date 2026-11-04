@@ -1,0 +1,194 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CMAKE_POLICY_VERSION_MINIMUM: "3.5"
+
+jobs:
+  # Single source of truth for the version; also guards that a release tag matches Cargo.toml.
+  prepare:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          test -n "$version"
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  test:
+    name: Test (Linux)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake pkg-config libasound2-dev libssl-dev
+      - name: Run tests
+        run: cargo test --locked
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-22.04 # older glibc (2.35) keeps the binary usable on more distros
+            target: x86_64-unknown-linux-gnu
+            bin: zline
+            archive: tar.gz
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: zline.exe
+            archive: zip
+          - name: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bin: zline
+            archive: tar.gz
+          - name: macos-x86_64
+            os: macos-latest # cross-compiled from the arm64 runner
+            target: x86_64-apple-darwin
+            bin: zline
+            archive: tar.gz
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake pkg-config libasound2-dev libssl-dev
+
+      # Build libopus from source and link it statically, so the binary does not depend on a
+      # system libopus (or a Homebrew dylib on macOS).
+      - name: Configure native build environment
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          {
+            echo "LIBOPUS_STATIC=1"
+            echo "LIBOPUS_NO_PKG=1"
+            echo "OPUS_STATIC=1"
+            echo "OPUS_NO_PKG=1"
+          } >> "$GITHUB_ENV"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=11.0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      # The macOS x86_64 binary cannot be assumed to run on the arm64 runner, so it is not smoke-tested.
+      - name: Smoke test
+        if: matrix.name != 'macos-x86_64'
+        shell: bash
+        run: |
+          "target/${{ matrix.target }}/release/${{ matrix.bin }}" --version
+          "target/${{ matrix.target }}/release/${{ matrix.bin }}" --help > /dev/null
+
+      - name: Package (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="zline-${VERSION}-${{ matrix.name }}"
+          mkdir -p "$stage" dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" README.md "$stage/"
+          tar -czf "dist/${stage}.tar.gz" "$stage"
+
+      - name: Package (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $stage = "zline-$($env:VERSION)-${{ matrix.name }}"
+          New-Item -ItemType Directory -Force -Path $stage, dist | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\${{ matrix.bin }}", "README.md" -Destination $stage
+          Compress-Archive -Path $stage -DestinationPath "dist\$stage.zip" -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zline-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+
+  # Only for version tags (v0.1.0, ...): publishes every build as a GitHub Release.
+  release:
+    name: Publish GitHub Release
+    needs: [prepare, test, build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          cd release_assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Z-Line ${{ github.ref_name }}
+          files: release_assets/*
+          generate_release_notes: true
+          body: |
+            Z-Line — Zalo cho terminal, dùng lõi giao thức của ctdozlite.
+
+            **Tải đúng gói cho hệ điều hành của bạn trong mục Assets**, giải nén rồi chạy `zline --help`.
+
+            - Linux x86_64: cần `libasound2` (ALSA) ở runtime.
+            - macOS (arm64 / x86_64): binary chưa ký. Nếu bị chặn, chạy `xattr -d com.apple.quarantine ./zline`.
+            - Kiểm tra toàn vẹn bằng `SHA256SUMS.txt`.
+
+            > Client không chính thức. Zalo có thể hạn chế tài khoản dùng client bên thứ ba; hãy thử bằng tài khoản phụ.

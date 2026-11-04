@@ -1,0 +1,7 @@
+# Applies to build scripts too. `zalo_rust` pulls in libopus, which is built from source with CMake;
+# CMake 4 rejects the old `cmake_minimum_required` in libopus without this override.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# Cross/native macOS builds need an explicit CMake toolchain for libopus (same settings ctdozlite uses).
+CMAKE_TOOLCHAIN_FILE_aarch64_apple_darwin = { value = "packaging/macos/toolchain-arm64.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_x86_64_apple_darwin = { value = "packaging/macos/toolchain-x86_64.cmake", relative = true }
