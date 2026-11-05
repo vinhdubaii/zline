@@ -55,6 +55,8 @@ pub enum Command {
         #[arg(long)]
         purge: bool,
     },
+    /// Chẩn đoán đăng nhập: kiểm tra từng bước và in mã lỗi của máy chủ (đã ẩn thông tin nhạy cảm)
+    Doctor,
     /// Hiện tài khoản đang đăng nhập và tình trạng phiên
     Whoami {
         /// Không hỏi máy chủ, chỉ đọc phiên đã lưu

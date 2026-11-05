@@ -37,6 +37,7 @@ Khi chưa đăng nhập hoặc phiên hết hạn, TUI vẫn mở để xem lị
 ```
 zline login [--force]          đăng nhập bằng mã QR (vẽ ngay trong terminal)
 zline whoami [--offline]       tài khoản và tình trạng phiên
+zline doctor                   chẩn đoán đăng nhập, in mã lỗi của máy chủ (đã ẩn thông tin nhạy cảm)
 zline sync                     tải danh sách bạn/nhóm và tin mới
 zline sync <nhóm|cloud>        kéo lịch sử cũ (nhóm và Cloud)
 zline ls [--groups|--friends] [--refresh] [-n N]

@@ -12,7 +12,7 @@ use crate::paths;
 pub const SESSION_FILE: &str = "session.json";
 pub const CACHE_FILE: &str = "threads_cache.json";
 pub const DB_FILE: &str = "zalo_history.db";
-pub const RELOGIN: &str = "Phiên đăng nhập đã hết hạn. Chạy `zline login` để đăng nhập lại.";
+pub const RELOGIN: &str = "Phiên đăng nhập đã hết hạn. Chạy `zline login` để đăng nhập lại. (Nếu vừa đăng nhập xong mà lỗi này lặp lại ngay, chạy `zline doctor` và gửi kết quả.)";
 
 pub struct Ctx {
     pub s: Session,
@@ -56,7 +56,16 @@ impl Ctx {
             bail!("{RELOGIN}");
         }
         match ctx.s.session_status().await {
-            SessionStatus::Valid => {}
+            SessionStatus::Valid => {
+                let unnamed = ctx
+                    .s
+                    .login
+                    .as_ref()
+                    .is_some_and(|l| l.display_name.is_empty());
+                if unnamed {
+                    ctx.refresh_profile().await;
+                }
+            }
             SessionStatus::Expired => {
                 ctx.expire();
                 bail!("{RELOGIN}");
@@ -66,6 +75,18 @@ impl Ctx {
             }
         }
         Ok(ctx)
+    }
+
+    /// Ask the server who we are and store the real user ID and display name. A fresh QR login
+    /// only knows the account by a login-scoped ID with no name, so this mirrors what ctdozlite
+    /// does right after start-up. Best effort: returns `false` when the server gave no profile.
+    pub async fn refresh_profile(&mut self) -> bool {
+        if self.s.sync_profile_me().await.is_some() {
+            let _ = self.s.save_to_file(SESSION_FILE);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn logged_in(&self) -> bool {

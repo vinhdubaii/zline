@@ -28,6 +28,7 @@ async fn run() -> Result<()> {
         Command::Tui => tui::run(g).await,
         Command::Login { force } => cmd::auth::login(g, force).await,
         Command::Logout { purge } => cmd::auth::logout(g, purge),
+        Command::Doctor => cmd::auth::doctor(g).await,
         Command::Whoami { offline } => cmd::auth::whoami(g, offline).await,
         Command::Ls {
             groups,
