@@ -2,6 +2,7 @@
 
 mod cli;
 mod cmd;
+mod cookies;
 mod ctx;
 mod fmt;
 mod paths;

@@ -7,10 +7,12 @@ use zalo_rust::data_dir;
 use zalo_rust::session::{Session, SessionStatus};
 
 use crate::cli::Global;
+use crate::cookies;
 use crate::paths;
 
 pub const SESSION_FILE: &str = "session.json";
 pub const CACHE_FILE: &str = "threads_cache.json";
+pub use crate::cookies::COOKIE_FILE;
 pub const DB_FILE: &str = "zalo_history.db";
 pub const RELOGIN: &str = "Phiên đăng nhập đã hết hạn. Chạy `zline login` để đăng nhập lại. (Nếu vừa đăng nhập xong mà lỗi này lặp lại ngay, chạy `zline doctor` và gửi kết quả.)";
 
@@ -18,6 +20,7 @@ pub struct Ctx {
     pub s: Session,
     pub dir: PathBuf,
     pub json: bool,
+    pub proxy: Option<String>,
 }
 
 impl Ctx {
@@ -39,10 +42,18 @@ impl Ctx {
             // A corrupt file is treated as "not logged in"; `login` will replace it.
             let _ = s.load_from_file(SESSION_FILE);
         }
+        if s.login.is_some() {
+            // Only present when a fresh session built from `session.json` alone was not accepted
+            // after login (see `cmd::auth::verify_restore`).
+            if let Some(snap) = cookies::load(Path::new(COOKIE_FILE)) {
+                cookies::inject(&s.jar, &snap);
+            }
+        }
         Ok(Self {
             s,
             dir,
             json: g.json,
+            proxy: g.proxy.clone(),
         })
     }
 

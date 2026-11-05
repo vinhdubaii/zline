@@ -1,6 +1,6 @@
 [package]
 name = "z-line"
-version = "0.1.6"
+version = "0.1.8"
 edition = "2021"
 description = "Z-Line: a terminal Zalo client (CLI + TUI) built on the ctdozlite core"
 publish = false
@@ -11,8 +11,8 @@ path = "src/main.rs"
 
 [dependencies]
 # The protocol layer is reused from ctdozlite (library crate `zalo_rust`). Pinned to a commit
-# because the API is pre-1.0 (v0.0.7) and not stable.
-zalo_rust = { package = "ctdozlite", git = "https://github.com/ctdoteam1110/ctdozlite", rev = "bcecc40c44f1c36de50b0f52cb97eeb868bacbe3" }
+# because the API is pre-1.0 (v0.0.8) and not stable.
+zalo_rust = { package = "ctdozlite", git = "https://github.com/ctdoteam1110/ctdozlite", rev = "477d6dec58e497bd162f6e7f3d66d612fdbdbb2f" }
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
 serde_json = "1"
@@ -21,6 +21,8 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util", "sy
 ratatui = "0.29"
 crossterm = "0.28"
 unicode-width = "0.2"
+# Same version as zalo_rust, so we share its cookie jar type (needed to read cookies back).
+reqwest = { version = "0.12", default-features = false, features = ["cookies"] }
 
 [profile.release]
 strip = true

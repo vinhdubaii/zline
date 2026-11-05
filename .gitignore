@@ -2,3 +2,4 @@
 session.json
 *.db
 threads_cache.json
+cookies.json

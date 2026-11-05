@@ -2,11 +2,12 @@ use anyhow::{bail, Context, Result};
 use serde_json::json;
 use zalo_rust::chat;
 use zalo_rust::qr;
-use zalo_rust::session::{redact_url, SessionError};
+use zalo_rust::session::{redact_url, Session, SessionError};
 use zalo_rust::session::SessionStatus;
 
 use crate::cli::Global;
-use crate::ctx::{Ctx, CACHE_FILE, DB_FILE, SESSION_FILE};
+use crate::cookies::{self, Snapshot};
+use crate::ctx::{Ctx, CACHE_FILE, COOKIE_FILE, DB_FILE, SESSION_FILE};
 
 fn remove_if_exists(path: &str) -> Result<bool> {
     match std::fs::remove_file(path) {
@@ -14,6 +15,93 @@ fn remove_if_exists(path: &str) -> Result<bool> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(e) => Err(e).with_context(|| format!("Không xóa được {path}")),
     }
+}
+
+/// One cheap authenticated call, to learn whether the server accepts this session right now.
+async fn probe(ctx: &Ctx) -> std::result::Result<usize, String> {
+    chat::get_friends(&ctx.s)
+        .await
+        .map(|list| list.len())
+        .map_err(|e| describe_error(&e))
+}
+
+/// Status of a brand-new session rebuilt from what is on disk, optionally with extra cookies or
+/// an alternative `zpw_sek` applied. This is what the next `zline` command will start from.
+async fn fresh_status(
+    proxy: Option<&str>,
+    cookies_snap: Option<&Snapshot>,
+    sek: Option<&str>,
+) -> SessionStatus {
+    let Ok(mut t) = Session::new(false, false, false) else {
+        return SessionStatus::Unreachable;
+    };
+    if let Some(p) = proxy {
+        let _ = t.set_proxy(Some(p));
+    }
+    if t.load_from_file(SESSION_FILE).is_err() {
+        return SessionStatus::Unreachable;
+    }
+    if let Some(snap) = cookies_snap {
+        cookies::inject(&t.jar, snap);
+    }
+    if let Some(v) = sek {
+        t.set_zpw_sek(v.to_string());
+    }
+    t.session_status().await
+}
+
+/// A login that only works inside the process that created it is useless for a CLI. Rebuild a
+/// fresh session from disk and ask the server; if it is refused, try the likely remedies and keep
+/// the first one that works.
+async fn verify_restore(ctx: &mut Ctx) {
+    eprintln!("… Kiểm tra phiên có khôi phục được ở lần chạy sau không");
+    let proxy = ctx.proxy.clone();
+    match fresh_status(proxy.as_deref(), None, None).await {
+        SessionStatus::Valid => {
+            eprintln!("✓ Phiên khôi phục được từ session.json.");
+            return;
+        }
+        SessionStatus::Unreachable => {
+            eprintln!("! Không có kết luận (mạng lỗi?). Thử `zline sync` để biết phiên có dùng được không.");
+            return;
+        }
+        SessionStatus::Expired => {}
+    }
+
+    let snap = cookies::capture(&ctx.s.jar, &cookies::hosts(&ctx.s));
+    let values = cookies::distinct_values(&snap, "zpw_sek");
+    let saved = ctx.s.zpw_sek.clone();
+    let saved_in_jar = values.iter().any(|v| Some(v.as_str()) == saved.as_deref());
+    eprintln!(
+        "! Phiên vừa lưu bị máy chủ từ chối khi nạp lại. Cookie jar: {} host, {} giá trị zpw_sek khác nhau, khóa đã lưu {}.",
+        snap.len(),
+        values.len(),
+        if saved_in_jar { "có trong jar" } else { "KHÔNG có trong jar" }
+    );
+
+    // Remedy 1: persist the whole cookie jar and restore it on every start.
+    if fresh_status(proxy.as_deref(), Some(&snap), None).await == SessionStatus::Valid {
+        match cookies::save(&snap, std::path::Path::new(COOKIE_FILE)) {
+            Ok(()) => eprintln!("✓ Đã khắc phục: lưu thêm cookie vào {COOKIE_FILE} (phiên giờ khôi phục được)."),
+            Err(e) => eprintln!("✗ Cookie đủ để khôi phục nhưng không ghi được {COOKIE_FILE}: {e:#}"),
+        }
+        return;
+    }
+
+    // Remedy 2: the saved key is not the one the server set; use another value from the jar.
+    for v in values.iter().filter(|v| Some(v.as_str()) != saved.as_deref()) {
+        if fresh_status(proxy.as_deref(), None, Some(v)).await == SessionStatus::Valid {
+            ctx.s.set_zpw_sek(v.clone());
+            match ctx.s.save_to_file(SESSION_FILE) {
+                Ok(()) => eprintln!("✓ Đã khắc phục: dùng khóa phiên lấy từ cookie của máy chủ."),
+                Err(e) => eprintln!("✗ Tìm được khóa đúng nhưng không lưu được session.json: {e:#}"),
+            }
+            return;
+        }
+    }
+
+    eprintln!("✗ Phiên dùng được trong lần chạy này nhưng không khôi phục được ở lần sau.");
+    eprintln!("  Hãy chạy `zline doctor` và gửi kết quả cùng dòng \"Cookie jar\" ở trên.");
 }
 
 pub async fn login(g: &Global, force: bool) -> Result<()> {
@@ -39,7 +127,21 @@ pub async fn login(g: &Global, force: bool) -> Result<()> {
     ctx.refresh_profile().await;
     if let Some(li) = ctx.s.login.as_ref() {
         let name = if li.display_name.is_empty() { "(chưa lấy được tên)" } else { li.display_name.as_str() };
-        eprintln!("✓ Xin chào {name} (UIN {}). Chạy `zline sync` để tải hội thoại.", li.uin);
+        eprintln!("✓ Xin chào {name} (UIN {}).", li.uin);
+    }
+    // Check the session in this same process, so a rejection can be told apart from one that only
+    // happens after `session.json` is reloaded.
+    match probe(&ctx).await {
+        Ok(n) => {
+            eprintln!("✓ Máy chủ chấp nhận phiên ({n} liên hệ).");
+            verify_restore(&mut ctx).await;
+            eprintln!("Chạy `zline sync` để tải hội thoại.");
+        }
+        Err(msg) => {
+            eprintln!("✗ Máy chủ từ chối phiên ngay sau khi đăng nhập: {msg}");
+            eprintln!("  Mã 600 ở bước này nghĩa là Zalo không nhận khóa phiên vừa cấp — không phải do bạn quét sai.");
+            eprintln!("  Chạy `zline doctor` và gửi kết quả (đã ẩn thông tin nhạy cảm) để tìm nguyên nhân.");
+        }
     }
     Ok(())
 }
@@ -47,7 +149,7 @@ pub async fn login(g: &Global, force: bool) -> Result<()> {
 pub fn logout(g: &Global, purge: bool) -> Result<()> {
     let ctx = Ctx::local(g)?;
     let mut removed = Vec::new();
-    for f in [SESSION_FILE, CACHE_FILE] {
+    for f in [SESSION_FILE, CACHE_FILE, COOKIE_FILE] {
         if remove_if_exists(f)? {
             removed.push(f);
         }
@@ -141,6 +243,9 @@ pub async fn doctor(g: &Global) -> Result<()> {
     println!("Thư mục dữ liệu: {}", ctx.dir.display());
     println!("{} session.json", mark(std::path::Path::new(SESSION_FILE).exists()));
     println!("{} zalo_history.db", mark(std::path::Path::new(DB_FILE).exists()));
+    if let Some(snap) = cookies::load(std::path::Path::new(COOKIE_FILE)) {
+        println!("✓ {COOKIE_FILE}: {} host (cookie bổ sung để khôi phục phiên)", snap.len());
+    }
 
     let Some(li) = ctx.s.login.as_ref() else {
         println!("✗ Chưa nạp được phiên (chưa đăng nhập hoặc session.json hỏng). Chạy `zline login`.");
@@ -152,6 +257,20 @@ pub async fn doctor(g: &Global) -> Result<()> {
         li.uin
     );
     println!("{} có khóa phiên zpw_sek", mark(!li.zpw_sek.is_empty()));
+    {
+        let sek = &li.zpw_sek;
+        let class = if sek.chars().all(|c| c.is_ascii_hexdigit()) {
+            "hex"
+        } else if sek.chars().all(|c| c.is_ascii_alphanumeric() || "+/=-_.".contains(c)) {
+            "chữ-số/base64"
+        } else {
+            "có ký tự lạ"
+        };
+        println!("  (zpw_sek dài {} ký tự, dạng {class}; không in nội dung)", sek.len());
+        println!("  endpoint hồ sơ: {}", ctx.s.domains.profile);
+        println!("  endpoint bạn bè: {}", ctx.s.domains.friend);
+        println!("  endpoint xác thực: {}", ctx.s.domains.auth);
+    }
     println!("{} có khóa zpw_enk", mark(!li.zpw_enk.is_empty()));
     println!(
         "{} máy chủ chưa từng từ chối phiên này (dấu hết hạn cục bộ: {})",

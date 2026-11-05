@@ -62,7 +62,7 @@ zline read "nguyen van an" -n 20 --json
 
 ## Dữ liệu
 
-Mỗi hồ sơ có thư mục riêng: `<data home>/z-line/profiles/<profile>/` (`$XDG_DATA_HOME` hoặc `~/.local/share` trên Linux) chứa `session.json`, `threads_cache.json`, `zalo_history.db`. Không commit các file này. Đừng trỏ `--data-dir` vào thư mục đang được ctdozlite dùng cùng lúc: hai tiến trình ghi chung SQLite và `session.json` có thể xung đột.
+Mỗi hồ sơ có thư mục riêng: `<data home>/z-line/profiles/<profile>/` (`$XDG_DATA_HOME` hoặc `~/.local/share` trên Linux) chứa `session.json`, `threads_cache.json`, `zalo_history.db` (và `cookies.json` nếu phiên cần cookie bổ sung để khôi phục, do `zline login` tự kiểm tra). Không commit các file này. Đừng trỏ `--data-dir` vào thư mục đang được ctdozlite dùng cùng lúc: hai tiến trình ghi chung SQLite và `session.json` có thể xung đột.
 
 ## Build
 
