@@ -1,6 +1,6 @@
 [package]
 name = "z-line"
-version = "0.1.1"
+version = "0.1.5"
 edition = "2021"
 description = "Z-Line: a terminal Zalo client (CLI + TUI) built on the ctdozlite core"
 publish = false
